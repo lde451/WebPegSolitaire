@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Peg Solitaire</title>
+  <link rel="stylesheet" href="WebPegSolitaire.css" />
+</head>
+<body>
+
+<!-- ----- 도움말 팝업 오버레이 ----- -->
+<div id="modal-overlay" onclick="handleOverlayClick(event)">
+  <div id="modal">
+
+    <!-- 닫기 버튼 -->
+    <button id="modal-close" onclick="closeHelp()">✕</button>
+
+    <h2>게임 방법</h2>
+
+    <h3>목표</h3>
+    <p>말을 하나씩 제거해서 마지막에 <strong>말 1개</strong>만 남기세요.<br>가운데 칸에 남으면 완벽한 클리어!</p>
+
+    <hr>
+
+    <h3>이동 규칙</h3>
+    <ul>
+      <li>말은 <strong>상·하·좌·우</strong>로만 이동 가능합니다. (대각선 불가)</li>
+      <li>인접한 말을 <strong>뛰어넘어</strong> 빈 칸으로 이동할 수 있습니다.</li>
+      <li>뛰어넘긴 말은 <strong>자동으로 제거</strong>됩니다.</li>
+      <li>이동할 수 없는 상태가 되면 게임이 종료됩니다.</li>
+    </ul>
+
+    <hr>
+
+    <h3>색상 안내</h3>
+    <ul>
+      <li><span class="badge" style="background:#79DAE1;"></span> 민트색 — 말이 있는 칸</li>
+      <li><span class="badge" style="background:#776D6B;"></span> 갈색 — 선택된 말</li>
+      <li><span class="badge" style="background:#B0A9A3; border: 1px solid #968B87;"></span> 연한 갈색 — 이동 가능한 칸</li>
+      <li><span class="badge" style="background:#ececec; border: 1px solid #ddd;"></span> 회색 — 빈칸</li>
+    </ul>
+
+    <hr>
+
+    <h3>버튼</h3>
+    <ul>
+      <li>↩ <strong>되돌리기</strong> — 마지막 이동을 취소합니다.</li>
+      <li>↺ <strong>다시 시작</strong> — 처음부터 다시 시작합니다.</li>
+    </ul>
+
+  </div>
+</div>
+<div id="game">
+  <!-- 도움말 버튼: 흰 카드 우측 상단에 고정 -->
+  <button id="help-btn" onclick="openHelp()">❓</button>
+  <h1>Peg Solitaire</h1>
+
+  <!-- 통계 표시 -->
+  <div id="info">
+    <div class="stat">
+      <div class="stat-label">남은 말</div>
+      <div class="stat-value" id="peg-count">32</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">이동 횟수</div>
+      <div class="stat-value" id="move-count">0</div>
+    </div>
+  </div>
+
+  <!-- 보드가 여기에 JS로 그려짐 -->
+  <div id="board"></div>
+
+  <!-- 안내 메시지 -->
+  <div id="msg">말을 선택하세요</div>
+
+  <!-- 게임 종료 메시지 (평소엔 숨김) -->
+  <div id="win-msg"></div>
+
+  <!-- 버튼 -->
+  <div id="btns">
+    <button onclick="undoMove()">↩ 되돌리기</button>
+    <button onclick="resetGame()">↺ 다시 시작</button>
+  </div>
+</div>
+
+<script>
+  // ------------------------------------------------------------
+  // 보드 초기 상태 정의 (영국식 십자형, 7×7)
+  //  1  = 말 있음
+  //  0  = 빈 구멍 (말 없음)
+  // -1  = 보드 밖 영역 (사용 안 함)
+  // 가운데(3,3)만 비어있고 나머지는 말로 채워짐
+  // ------------------------------------------------------------
+  const BOARD = [
+    [-1,-1, 1, 1, 1,-1,-1],
+    [-1,-1, 1, 1, 1,-1,-1],
+    [ 1, 1, 1, 1, 1, 1, 1],
+    [ 1, 1, 1, 0, 1, 1, 1],  // 가운데(3,3)가 시작 빈 칸
+    [ 1, 1, 1, 1, 1, 1, 1],
+    [-1,-1, 1, 1, 1,-1,-1],
+    [-1,-1, 1, 1, 1,-1,-1]
+  ];
+
+  // ── 게임 상태 변수 ──
+  let board;     // 현재 보드 상태 (2차원 배열)
+  let selected;  // 현재 선택된 말의 위치 [행, 열] 또는 null
+  let moves;     // 총 이동 횟수
+  let history;   // 되돌리기를 위한 이전 상태 기록 배열
+
+  // ------------------------------------------------------------
+  // 게임 초기화: 보드를 초기 상태로 리셋
+  // ------------------------------------------------------------
+  function initBoard() {
+    // BOARD를 깊은 복사 (원본 보호)
+    board = BOARD.map(row => [...row]);
+    selected = null;
+    moves = 0;
+    history = [];
+  }
+
+  // ------------------------------------------------------------
+  // 현재 보드에서 말(값=1)의 개수를 세어 반환
+  // ------------------------------------------------------------
+  function countPegs() {
+    return board.flat().filter(v => v === 1).length;
+    // flat()으로 2차원 → 1차원 변환 후 1인 것만 필터링
+  }
+
+  // ------------------------------------------------------------
+  // 보드를 화면에 다시 그리는 함수
+  // board 배열을 읽어 각 칸을 div로 생성
+  // ------------------------------------------------------------
+  function render() {
+    const el = document.getElementById('board');
+    el.innerHTML = ''; // 기존 내용 초기화
+
+    for (let r = 0; r < 7; r++) {
+      for (let c = 0; c < 7; c++) {
+        const div = document.createElement('div');
+        div.className = 'cell';
+
+        const v = board[r][c];
+
+        if (v === -1) {
+          // 보드 밖 영역 → 투명 칸
+          div.classList.add('empty');
+
+        } else if (v === 1) {
+          // 말이 있는 칸
+          div.classList.add('peg');
+
+          // 현재 선택된 말이면 주황색으로 표시
+          if (selected && selected[0] === r && selected[1] === c) {
+            div.classList.add('selected');
+          }
+
+          // 클릭하면 말 선택 함수 호출
+          div.onclick = () => selectPeg(r, c);
+
+        } else {
+          // 빈 구멍 (v === 0)
+          div.classList.add('hole');
+
+          // 선택된 말이 이 빈 칸으로 이동 가능하면 초록 힌트 표시
+          if (selected && isValidMove(selected[0], selected[1], r, c)) {
+            div.classList.add('hint');
+          }
+
+          // 클릭하면 이동 시도 함수 호출
+          div.onclick = () => tryMove(r, c);
+        }
+
+        el.appendChild(div);
+      }
+    }
+
+    // 통계 업데이트
+    document.getElementById('peg-count').textContent = countPegs();
+    document.getElementById('move-count').textContent = moves;
+
+    // 게임 종료 여부 체크
+    checkEnd();
+  }
+
+  // ------------------------------------------------------------
+  // 말 선택 처리
+  // - 이미 선택된 말을 다시 클릭하면 선택 해제
+  // - 다른 말을 클릭하면 새로 선택
+  // ------------------------------------------------------------
+  function selectPeg(r, c) {
+    if (selected && selected[0] === r && selected[1] === c) {
+      // 같은 말 재클릭 → 선택 해제
+      selected = null;
+      document.getElementById('msg').textContent = '말을 선택하세요';
+    } else {
+      // 새 말 선택
+      selected = [r, c];
+      document.getElementById('msg').textContent = '이동할 빈 칸을 선택하세요';
+    }
+    render();
+  }
+
+  // ------------------------------------------------------------
+  // 이동 유효성 검사
+  // 페그 솔리테어 규칙:
+  //   - 상하좌우로 2칸 이동 (대각선 불가)
+  //   - 중간 칸에 말이 있어야 함
+  //   - 목적지는 빈 구멍이어야 함
+  // ------------------------------------------------------------
+  function isValidMove(fr, fc, tr, tc) {
+    const dr = tr - fr; // 행 차이
+    const dc = tc - fc; // 열 차이
+
+    // 정확히 2칸 이동인지 확인 (상하 or 좌우)
+    if (!((Math.abs(dr) === 2 && dc === 0) || (Math.abs(dc) === 2 && dr === 0))) {
+      return false;
+    }
+
+    // 중간 칸 좌표 계산
+    const mr = fr + dr / 2;
+    const mc = fc + dc / 2;
+
+    // 목적지가 빈 칸이고, 중간 칸에 말이 있어야 유효
+    return board[tr][tc] === 0 && board[mr][mc] === 1;
+  }
+
+  // ------------------------------------------------------------
+  // 이동 실행
+  // 선택된 말 → 빈 칸으로 이동, 중간 말 제거
+  // ------------------------------------------------------------
+  function tryMove(tr, tc) {
+    if (!selected) return; // 선택된 말 없으면 무시
+
+    const [fr, fc] = selected;
+
+    if (!isValidMove(fr, fc, tr, tc)) {
+      // 이동 불가한 칸 클릭 시
+      document.getElementById('msg').textContent = '이동할 수 없는 칸입니다';
+      selected = null;
+      render();
+      return;
+    }
+
+    // 중간 칸 좌표
+    const mr = fr + (tr - fr) / 2;
+    const mc = fc + (tc - fc) / 2;
+
+    // 되돌리기를 위해 현재 상태 저장
+    history.push({
+      boardSnap: board.map(row => [...row]) // 보드 깊은 복사
+    });
+
+    // 보드 상태 업데이트
+    board[fr][fc] = 0; // 출발지: 말 제거 → 빈 칸
+    board[mr][mc] = 0; // 중간 칸: 뛰어넘긴 말 제거
+    board[tr][tc] = 1; // 목적지: 빈 칸 → 말 추가
+
+    moves++;
+    selected = null;
+    document.getElementById('msg').textContent = '말을 선택하세요';
+    render();
+  }
+
+  // ------------------------------------------------------------
+  // 되돌리기: 직전 상태로 복원
+  // ------------------------------------------------------------
+  function undoMove() {
+    if (!history.length) return; // 기록 없으면 무시
+
+    const last = history.pop();
+    board = last.boardSnap.map(row => [...row]); // 이전 보드 복원
+    moves = Math.max(0, moves - 1);
+    selected = null;
+
+    document.getElementById('msg').textContent = '되돌리기 완료';
+    document.getElementById('win-msg').style.display = 'none';
+    render();
+  }
+
+  // ------------------------------------------------------------
+  // 더 이동 가능한 수가 있는지 확인
+  // 모든 말에 대해 4방향 이동 가능 여부를 체크
+  // ------------------------------------------------------------
+  function hasValidMoves() {
+    for (let r = 0; r < 7; r++) {
+      for (let c = 0; c < 7; c++) {
+        if (board[r][c] !== 1) continue; // 말이 없으면 건너뜀
+
+        // 상하좌우 2칸씩 확인
+        const dirs = [[0, 2], [0, -2], [2, 0], [-2, 0]];
+        for (const [dr, dc] of dirs) {
+          const tr = r + dr;
+          const tc = c + dc;
+          // 보드 범위 안이고 이동 가능하면 true 반환
+          if (tr >= 0 && tr < 7 && tc >= 0 && tc < 7 && isValidMove(r, c, tr, tc)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false; // 이동 가능한 수 없음
+  }
+
+  // ------------------------------------------------------------
+  // 게임 종료 조건 체크
+  //  - 말이 1개 남으면 완벽한 승리
+  //  - 이동 가능한 수가 없으면 게임 오버
+  // ------------------------------------------------------------
+  function checkEnd() {
+    const pegs = countPegs();
+    const winMsg = document.getElementById('win-msg');
+
+    if (pegs === 1) {
+      const isPerfect = board[3][3] === 1; // 정가운데(3,3)에 말이 있으면 완벽 성공
+      if (isPerfect) {
+        winMsg.textContent = '🏆 완벽한 클리어!';
+        winMsg.classList.add('perfect');
+        // 정가운데 칸 강조
+        const cells = document.querySelectorAll('#board .cell');
+        cells[3 * 7 + 3].classList.add('perfect-center');
+      } else {
+        winMsg.textContent = '✔ 성공 — 가운데는 아니지만 1개 남았어요!';
+        winMsg.classList.remove('perfect');
+      }
+      winMsg.style.display = 'block';
+      document.getElementById('msg').textContent = '';
+    } else if (!hasValidMoves()) {
+      winMsg.textContent = `게임 종료 — ${pegs}개 남았습니다`;
+      winMsg.classList.remove('perfect');
+      winMsg.style.display = 'block';
+      document.getElementById('msg').textContent = '';
+    } else {
+      winMsg.classList.remove('perfect');
+      winMsg.style.display = 'none'; // 게임 진행 중이면 숨김
+    }
+  }
+
+  // ------------------------------------------------------------
+  // 게임 리셋: 처음 상태로 되돌리기
+  // ------------------------------------------------------------
+  function resetGame() {
+    initBoard();
+    document.getElementById('win-msg').style.display = 'none';
+    document.getElementById('msg').textContent = '말을 선택하세요';
+    render();
+  }
+
+  // ------------------------------------------------------------
+  // 도움말 팝업 열기 / 닫기
+  // ------------------------------------------------------------
+
+  function openHelp() {
+    // 오버레이에 'open' 클래스를 추가 → CSS에서 display: flex로 전환
+    document.getElementById('modal-overlay').classList.add('open');
+  }
+
+  function closeHelp() {
+    // 'open' 클래스 제거 → 팝업 숨김
+    document.getElementById('modal-overlay').classList.remove('open');
+  }
+
+  function handleOverlayClick(e) {
+    // 오버레이(배경) 클릭 시 닫기
+    // e.target이 overlay 자신일 때만 닫음 (팝업 내부 클릭은 무시)
+    if (e.target === document.getElementById('modal-overlay')) {
+      closeHelp();
+    }
+  }
+
+  // ── 게임 시작 ──
+  initBoard();
+  render();
+</script>
+</body>
+</html>
